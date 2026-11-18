@@ -1,0 +1,86 @@
+import hashlib
+import os
+import socket
+
+
+def calculate_sha256(file_path):
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.digest()  # Returns 32 binary bytes
+
+
+def run_sender_with_integrity():
+    receiver_address = ("10.0.0.2", 9999)
+    file_path = "test.txt"
+
+    if not os.path.exists(file_path):
+        print(f"[ERROR] Source file '{file_path}' not found!")
+        return
+
+    # Calculate file hash before sending
+    file_hash = calculate_sha256(file_path)
+    print(f"[SENDER] Original File SHA-256: {file_hash.hex()}")
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(1.0)
+
+    chunk_size = 1024
+    seq_num = 0
+    max_retries = 5
+
+    with open(file_path, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+
+            packet = seq_num.to_bytes(4, "big") + b"D" + chunk
+            retries = 0
+            success = False
+
+            while retries < max_retries and not success:
+                try:
+                    sock.sendto(packet, receiver_address)
+                    ack_packet, _ = sock.recvfrom(1024)
+                    ack_seq = int.from_bytes(ack_packet[:4], "big")
+                    if ack_packet[4:5].decode("utf-8") == "A" and ack_seq == seq_num:
+                        success = True
+                except TimeoutError:
+                    retries += 1
+                    print(
+                        f"[WARNING] Timeout on packet {seq_num}. Retrying {retries}/{max_retries}..."
+                    )
+
+            if not success:
+                print(f"[ERROR] Max retries reached for packet {seq_num}.")
+                sock.close()
+                return
+            seq_num += 1
+
+    # Send EOF packet containing the 32-byte SHA-256 hash
+    eof_packet = seq_num.to_bytes(4, "big") + b"E" + file_hash
+    eof_success = False
+    retries = 0
+
+    while retries < max_retries and not eof_success:
+        try:
+            sock.sendto(eof_packet, receiver_address)
+            ack_packet, _ = sock.recvfrom(1024)
+            if ack_packet[4:5].decode("utf-8") == "A":
+                print(
+                    "[SUCCESS] EOF and Hash acknowledged by receiver. Transfer complete!"
+                )
+                eof_success = True
+        except TimeoutError:
+            retries += 1
+            print(
+                f"[WARNING] Timeout on EOF packet. Retrying {retries}/{max_retries}..."
+            )
+
+    sock.close()
+
+
+if __name__ == "__main__":
+    run_sender_with_integrity()
