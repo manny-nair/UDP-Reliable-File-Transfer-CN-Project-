@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reliable UDP over SDN</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one narrow lab bench — header, topology strip, controls + stats, then sender/receiver consoles side by side */
+:root{
+  --bg:#f3f5f8; --panel:#ffffff; --line:#d6dce5; --fg:#18202b; --muted:#5d6878;
+  --accent:#0f7b8a; --pathA:#2f62d6; --pathB:#c27a12; --ok:#1d8a4e; --bad:#c7392f;
+  --console:#0f1620; --console-fg:#cfe1ea;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0e131a; --panel:#161d27; --line:#2a3443; --fg:#e4e9f0; --muted:#94a0b2;
+  --accent:#3cc0cf; --pathA:#6f97ff; --pathB:#f0a83a; --ok:#47c27c; --bad:#ff6b5f;
+  --console:#080c11; --console-fg:#cfe1ea; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e131a; --panel:#161d27; --line:#2a3443; --fg:#e4e9f0; --muted:#94a0b2;
+  --accent:#3cc0cf; --pathA:#6f97ff; --pathB:#f0a83a; --ok:#47c27c; --bad:#ff6b5f;
+  --console:#080c11; --console-fg:#cfe1ea; color-scheme:dark}
+
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.5}
+.wrap{max-width:1040px;margin:0 auto;padding-block:24px 48px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:grid;gap:16px}
+header h1{font-size:1.6rem;margin:0;font-weight:600;text-wrap:balance;letter-spacing:-.01em}
+header p{margin:4px 0 0;color:var(--muted);max-width:68ch}
+.tag{font-family:var(--mono);font-size:.75rem;color:var(--accent);letter-spacing:.06em;text-transform:uppercase}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0}
+.panel h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:0 0 10px;font-weight:600}
+
+/* topology */
+.topo{overflow-x:auto}
+.topo svg{width:100%;min-width:560px;height:auto;display:block}
+.node rect,.node circle{fill:var(--panel);stroke:var(--fg);stroke-width:1.5}
+.node text{fill:var(--fg);font-family:var(--mono);font-size:13px;font-weight:600}
+.sub{fill:var(--muted);font-family:var(--mono);font-size:10.5px}
+.link{fill:none;stroke:var(--line);stroke-width:3}
+.pA{stroke:var(--pathA)} .pB{stroke:var(--pathB)}
+.inactive{opacity:.3} .cut{stroke-dasharray:6 6;opacity:.55}
+.pathlbl{font-family:var(--mono);font-size:11px;font-weight:600}
+.cutmark{stroke:var(--bad);stroke-width:3}
+.pkt{fill:var(--accent)} .ack{fill:var(--ok)} .lost{fill:var(--bad)}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:.82rem;color:var(--muted);margin-top:8px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+
+/* controls */
+.grid2{display:grid;grid-template-columns:1.3fr 1fr;gap:16px}
+@media (max-width:760px){.grid2{grid-template-columns:1fr}}
+label{font-size:.85rem;font-weight:500;display:block;margin-bottom:4px}
+textarea,select,input[type=file]{width:100%;box-sizing:border-box;font-family:var(--mono);font-size:.85rem;
+  background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:8px}
+textarea{min-height:84px;resize:vertical}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:end}
+.row>div{flex:1 1 140px;min-width:0}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.val{font-family:var(--mono);font-size:.8rem;color:var(--muted)}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+button{font-family:var(--sans);font-size:.9rem;font-weight:600;border-radius:6px;padding:9px 14px;cursor:pointer;
+  border:1px solid var(--line);background:var(--bg);color:var(--fg)}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--panel)}
+button.danger{color:var(--bad);border-color:var(--bad);background:transparent}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,textarea:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.check{display:flex;gap:8px;align-items:center;font-size:.85rem;margin-top:10px}
+.hint{font-size:.8rem;color:var(--muted);margin:6px 0 0}
+
+/* stats */
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.stat{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.stat b{display:block;font-family:var(--mono);font-size:1.25rem;font-variant-numeric:tabular-nums}
+.stat span{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.status{margin-top:12px;font-family:var(--mono);font-size:.85rem;padding:8px 10px;border-radius:6px;border:1px solid var(--line)}
+.status.ok{color:var(--ok);border-color:var(--ok)} .status.bad{color:var(--bad);border-color:var(--bad)}
+.flows{font-family:var(--mono);font-size:.78rem;margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;white-space:pre;overflow-x:auto}
+
+/* packet format */
+.fmt{display:flex;font-family:var(--mono);font-size:.78rem;overflow-x:auto}
+.fmt div{border:1px solid var(--line);padding:6px 10px;white-space:nowrap}
+.fmt div+div{border-left:none}
+.fmt small{display:block;color:var(--muted);font-size:.7rem}
+
+/* consoles */
+.console{background:var(--console);color:var(--console-fg);font-family:var(--mono);font-size:.78rem;
+  border-radius:8px;padding:10px;height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+.console .w{color:#f0b44a} .console .e{color:#ff7a70} .console .s{color:#5fd68f} .console .i{color:#7fb5ff}
+.hash{font-family:var(--mono);font-size:.75rem;word-break:break-all;margin-top:8px;color:var(--muted)}
+.hash b{color:var(--fg);font-weight:600}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+<style>body{margin:0}[hidden]{display:none!important}</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="tag">Jackfruit · Problem 4</div>
+    <h1>Reliable UDP File Transfer over SDN</h1>
+    <p>Simulates the project: Stop-and-Wait ARQ (sequence numbers, ACKs, 1 s timeout, 5 retries), SHA-256 check in the EOF packet, and an SDN controller that moves traffic from Path A to Path B when a link fails.</p>
+  </header>
+
+  <section class="panel topo" aria-label="Network topology">
+    <h2>Mininet topology</h2>
+    <svg id="svg" viewBox="0 0 640 200" role="img" aria-label="h1 to s1, two links to s2, then h2">
+      <path class="link" d="M70 100 L180 100"/>
+      <path class="link" d="M460 100 L570 100"/>
+      <path id="linkA" class="link pA" d="M220 92 L270 45 L370 45 L420 92"/>
+      <path id="linkB" class="link pB inactive" d="M220 108 L270 155 L370 155 L420 108"/>
+      <text class="pathlbl" x="320" y="35" text-anchor="middle" fill="var(--pathA)">Path A · s1-eth2 ↔ s2-eth1</text>
+      <text class="pathlbl" x="320" y="175" text-anchor="middle" fill="var(--pathB)">Path B · s1-eth3 ↔ s2-eth2</text>
+      <g id="cutX" hidden><line class="cutmark" x1="310" y1="35" x2="330" y2="55"/><line class="cutmark" x1="330" y1="35" x2="310" y2="55"/></g>
+      <g class="node"><rect x="20" y="78" width="54" height="44" rx="6"/><text x="47" y="105" text-anchor="middle">h1</text></g>
+      <text class="sub" x="47" y="140" text-anchor="middle">10.0.0.1</text>
+      <text class="sub" x="47" y="154" text-anchor="middle">sender</text>
+      <g class="node"><circle cx="200" cy="100" r="22"/><text x="200" y="105" text-anchor="middle">s1</text></g>
+      <g class="node"><circle cx="440" cy="100" r="22"/><text x="440" y="105" text-anchor="middle">s2</text></g>
+      <g class="node"><rect x="566" y="78" width="54" height="44" rx="6"/><text x="593" y="105" text-anchor="middle">h2</text></g>
+      <text class="sub" x="593" y="140" text-anchor="middle">10.0.0.2:9999</text>
+      <text class="sub" x="593" y="154" text-anchor="middle">receiver</text>
+      <g id="dots"></g>
+    </svg>
+    <div class="legend"><span><i style="background:var(--accent)"></i>Data packet (D / E)</span><span><i style="background:var(--ok)"></i>ACK (A)</span><span><i style="background:var(--bad)"></i>Lost</span></div>
+  </section>
+
+  <div class="grid2">
+    <section class="panel" aria-label="Controls">
+      <h2>Transfer setup</h2>
+      <label for="txt">File content (test.txt)</label>
+      <textarea id="txt">Hello! This is our networking project file transfer test. We split this file into numbered chunks, send each chunk over UDP, wait for an ACK, and retransmit on timeout. The receiver checks the SHA-256 hash at the end.</textarea>
+      <p class="hint">Or upload a small file (up to 20 KB):</p>
+      <input type="file" id="file">
+      <div class="row" style="margin-top:12px">
+        <div><label for="chunk">Chunk size</label>
+          <select id="chunk"><option value="32">32 B (more packets)</option><option value="64" selected>64 B</option><option value="256">256 B</option><option value="1024">1024 B (project value)</option></select></div>
+        <div><label for="loss">Packet loss <span class="val" id="lossV">15%</span></label><input type="range" id="loss" min="0" max="50" value="15"></div>
+        <div><label for="speed">Speed <span class="val" id="speedV">1×</span></label><input type="range" id="speed" min="1" max="5" value="1"></div>
+      </div>
+      <label class="check"><input type="checkbox" id="corrupt"> Corrupt one byte at receiver (shows hash mismatch)</label>
+      <div class="btns">
+        <button class="primary" id="start">Start transfer</button>
+        <button class="danger" id="cut" disabled>Cut Path A</button>
+        <button id="reset">Reset</button>
+      </div>
+    </section>
+
+    <section class="panel" aria-label="Statistics">
+      <h2>Live stats</h2>
+      <div class="stats">
+        <div class="stat"><b id="sPk">0 / 0</b><span>Packets ACKed</span></div>
+        <div class="stat"><b id="sRt">0</b><span>Retransmissions</span></div>
+        <div class="stat"><b id="sDup">0</b><span>Duplicates dropped</span></div>
+        <div class="stat"><b id="sPath">A</b><span>Active path</span></div>
+      </div>
+      <div class="status" id="status">Idle — press Start transfer.</div>
+      <div class="flows" id="flows"></div>
+    </section>
+  </div>
+
+  <section class="panel" aria-label="Packet format">
+    <h2>Packet format</h2>
+    <div class="fmt">
+      <div>seq<small>bytes 0–3 · big-endian</small></div>
+      <div>type<small>byte 4 · D / A / E</small></div>
+      <div style="flex:1">payload<small>5+ · file chunk, or 32-byte SHA-256 in E</small></div>
+    </div>
+  </section>
+
+  <div class="grid2" style="grid-template-columns:1fr 1fr">
+    <section class="panel"><h2>h1 · sender.py</h2><div class="console" id="logS"></div><div class="hash" id="hS"></div></section>
+    <section class="panel"><h2>h2 · receiver.py</h2><div class="console" id="logR"></div><div class="hash" id="hR"></div></section>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const NS="http://www.w3.org/2000/svg";
+const TIMEOUT=1000, MAX_RETRIES=5;
+let st, runId=0;
+
+// waypoints
+const P={h1:[74,100], s1:[200,100], s2:[440,100], h2:[566,100],
+  A:[[220,92],[270,45],[370,45],[420,92]], B:[[220,108],[270,155],[370,155],[420,108]]};
+const route=path=>[P.h1,P.s1,...P[path],P.s2,P.h2];
+
+function fresh(){return {path:'A',cutA:false,rerouting:false,acked:0,total:0,rt:0,dup:0,running:false};}
+function speed(){return +$('speed').value;}
+function sleep(ms,id){return new Promise(r=>setTimeout(r,ms/speed()));}
+function log(el,msg,c){const d=document.createElement('div');if(c)d.className=c;d.textContent=msg;$(el).appendChild(d);$(el).scrollTop=1e9;}
+function hex(buf){return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');}
+async function sha256(bytes){
+  if(crypto?.subtle) return new Uint8Array(await crypto.subtle.digest('SHA-256',bytes));
+  throw new Error('SHA-256 not available in this browser');
+}
+function flows(){
+  const a=st.path==='A'; const s1=a?2:3, s2=a?1:2;
+  $('flows').textContent=`$ ovs-ofctl dump-flows s1\n in_port=1 actions=output:${s1}\n in_port=${s1} actions=output:1\n$ ovs-ofctl dump-flows s2\n in_port=${s2} actions=output:3\n in_port=3 actions=output:${s2}`;
+}
+function stats(){
+  $('sPk').textContent=`${st.acked} / ${st.total}`; $('sRt').textContent=st.rt; $('sDup').textContent=st.dup;
+  $('sPath').textContent=st.path; $('sPath').style.color=st.path==='A'?'var(--pathA)':'var(--pathB)';
+}
+function setStatus(t,c){const s=$('status');s.textContent=t;s.className='status'+(c?' '+c:'');}
+
+// animate a dot along points; stopAt = fraction (0..1) where it is lost
+function fly(points,cls,dur,stopAt,id){
+  return new Promise(res=>{
+    const segs=[];let L=0;
+    for(let i=1;i<points.length;i++){const d=Math.hypot(points[i][0]-points[i-1][0],points[i][1]-points[i-1][1]);segs.push(d);L+=d;}
+    const c=document.createElementNS(NS,'circle');c.setAttribute('r',7);c.setAttribute('class',cls);$('dots').appendChild(c);
+    const end=stopAt??1, t0=performance.now(), D=dur/speed()*end;
+    function at(f){let x=f*L;for(let i=0;i<segs.length;i++){if(x<=segs[i]||i===segs.length-1){const k=Math.min(1,x/segs[i]);return[points[i][0]+(points[i+1][0]-points[i][0])*k,points[i][1]+(points[i+1][1]-points[i][1])*k];}x-=segs[i];}}
+    function step(now){
+      if(id!==runId){c.remove();return res();}
+      const f=Math.min(1,(now-t0)/D)*end;const [x,y]=at(f);c.setAttribute('cx',x);c.setAttribute('cy',y);
+      if(f<end) requestAnimationFrame(step);
+      else if(stopAt!=null){c.setAttribute('class','lost');setTimeout(()=>{c.remove();res();},350/speed());}
+      else{c.remove();res();}
+    }
+    requestAnimationFrame(step);
+  });
+}
+// fraction along route where Path A's middle sits (for cut-link drops)
+const MID_A=0.5;
+
+// one leg: returns true if delivered
+async function leg(dir,cls,id){
+  const pts=route(st.path); const p=dir==='fwd'?pts:[...pts].reverse();
+  const deadPath = st.path==='A' && st.cutA;
+  const randomLoss = Math.random()*100 < +$('loss').value;
+  if(deadPath){await fly(p,cls,700,MID_A,id);return 'cut';}
+  if(randomLoss){await fly(p,cls,700,0.25+Math.random()*0.5,id);return 'lost';}
+  await fly(p,cls,700,null,id);return 'ok';
+}
+
+async function getBytes(){
+  const f=$('file').files[0];
+  if(f){ if(f.size>20480) throw new Error(`File is ${f.size} bytes; pick one under 20 KB or paste text instead.`); return new Uint8Array(await f.arrayBuffer()); }
+  return new TextEncoder().encode($('txt').value);
+}
+
+async function run(){
+  const id=++runId; st=fresh(); st.running=true; clear(); flows();
+  $('start').disabled=true; $('cut').disabled=false;
+  let data; try{data=await getBytes();}catch(e){setStatus(e.message,'bad');end();return;}
+  if(!data.length){setStatus('File is empty — add some text first.','bad');end();return;}
+  const size=+$('chunk').value; const chunks=[];
+  for(let i=0;i<data.length;i+=size) chunks.push(data.slice(i,i+size));
+  st.total=chunks.length+1; stats();
+  const hash=await sha256(data);
+  log('logR','[RECEIVER] Listening on 0.0.0.0:9999...','i');
+  log('logS',`[SENDER] Original File SHA-256: ${hex(hash)}`,'i');
+  log('logS',`[SENDER] ${data.length} bytes → ${chunks.length} data packets + 1 EOF`);
+  $('hS').innerHTML=`Sender hash: <b>${hex(hash)}</b>`;
+  setStatus('Transferring…');
+
+  let expected=0; const recv=[]; let rHash=null;
+  const packets=[...chunks.map((c,i)=>({seq:i,type:'D',payload:c})),{seq:chunks.length,type:'E',payload:hash}];
+
+  for(const pk of packets){
+    let retries=0, done=false;
+    while(!done){
+      if(id!==runId) return;
+      if(retries>0){st.rt++;stats();}
+      const r=await leg('fwd','pkt',id);
+      if(r==='ok'){
+        // receiver logic
+        if(pk.type==='E'){ rHash=pk.payload; log('logR',`[RECEIVER] End-of-file received. Sender's Hash: ${hex(rHash).slice(0,16)}…`,'i'); }
+        else if(pk.seq===expected){ recv.push(pk.payload); expected++; log('logR',`[RECEIVER] Accepted packet ${pk.seq}`); }
+        else if(pk.seq<expected){ st.dup++; stats(); log('logR',`[RECEIVER] Duplicate packet ${pk.seq} — discarded, re-sending ACK`,'w'); }
+        const a=await leg('back','ack',id);
+        if(a==='ok'){ done=true; st.acked++; stats(); log('logS',`[SENDER] ACK ${pk.seq} received`,'s'); break; }
+        if(a==='cut') log('logS',`[SENDER] ACK ${pk.seq} dropped on dead Path A`,'e');
+      } else if(r==='cut'){
+        log('logS',`[SENDER] Packet ${pk.seq} dropped — Path A is down`,'e');
+      }
+      // timeout wait
+      await sleep(TIMEOUT,id); if(id!==runId) return;
+      retries++;
+      log('logS',`[WARNING] Timeout on ${pk.type==='E'?'EOF packet':'packet '+pk.seq}. Retrying ${retries}/${MAX_RETRIES}...`,'w');
+      if(retries>=MAX_RETRIES){ log('logS',`[ERROR] Max retries reached for packet ${pk.seq}.`,'e'); setStatus(`Failed: packet ${pk.seq} hit ${MAX_RETRIES} retries.`,'bad'); end(); return; }
+    }
+  }
+  log('logS','[SUCCESS] EOF and Hash acknowledged by receiver. Transfer complete!','s');
+
+  // verify
+  const total=recv.reduce((n,c)=>n+c.length,0); const out=new Uint8Array(total); let o=0; for(const c of recv){out.set(c,o);o+=c.length;}
+  if($('corrupt').checked && out.length) out[Math.floor(out.length/2)]^=0x01;
+  const cHash=await sha256(out);
+  log('logR',`[VERIFICATION] Computed File SHA-256: ${hex(cHash).slice(0,16)}…`,'i');
+  $('hR').innerHTML=`Receiver hash: <b>${hex(cHash)}</b>`;
+  const match=hex(cHash)===hex(rHash);
+  if(match){log('logR','[SUCCESS] SHA-256 Hash matches perfectly! File integrity verified.','s');setStatus(`Done — ${packets.length} packets, ${st.rt} retransmissions, hash matches.`,'ok');}
+  else{log('logR','[ERROR] Hash mismatch! File is corrupted.','e');setStatus('Done — hash mismatch, file is corrupted.','bad');}
+  end();
+}
+function end(){st.running=false;$('start').disabled=false;$('cut').disabled=true;}
+
+async function cutA(){
+  if(st.cutA) return; const id=runId;
+  st.cutA=true; $('cut').disabled=true; $('cutX').hidden=false; $('linkA').classList.add('cut');
+  log('logS','[ALERT] Link failure on Path A (s1-eth2 down)','e');
+  setStatus('Path A is down — controller rerouting…','bad');
+  await sleep(1800,id); if(id!==runId) return;
+  st.path='B'; flows(); stats();
+  $('linkA').classList.add('inactive'); $('linkB').classList.remove('inactive');
+  log('logS','[CONTROLLER] Installed Path B rules (s1 port 3 ↔ s2 port 2)','i');
+  if(st.running) setStatus('Rerouted to Path B — transfer continuing…');
+}
+function clear(){
+  $('dots').innerHTML='';['logS','logR'].forEach(i=>$(i).innerHTML='');$('hS').textContent='';$('hR').textContent='';
+  $('cutX').hidden=true;$('linkA').classList.remove('cut','inactive');$('linkB').classList.add('inactive');
+}
+function reset(){runId++; st=fresh(); clear(); flows(); stats(); end(); setStatus('Idle — press Start transfer.');}
+
+$('start').onclick=run; $('cut').onclick=cutA; $('reset').onclick=reset;
+$('loss').oninput=e=>$('lossV').textContent=e.target.value+'%';
+$('speed').oninput=e=>$('speedV').textContent=e.target.value+'×';
+reset();
+</script>
+</body>
+</html>
